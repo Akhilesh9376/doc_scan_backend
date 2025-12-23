@@ -2,8 +2,11 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import multer from "multer";
-import mongoose from "mongoose";
-import { initSocket } from "./websocket/socket.js"; 
+import { createServer as createHttpServer } from "http";
+
+import { initSocket } from "./websocket/socket.js";
+import { connectDB } from "./utils/dbConnect.js";
+
 // Auth controllers
 import {
   handleSendOTP,
@@ -24,50 +27,32 @@ import {
   handleSendChatMessage,
 } from "./controllers/chat.controller.js";
 
-// User routes (Router)
+// User routes
 import userRoutes from "./routes/users.js";
-
-const MONGODB_URI =
-  process.env.MONGODB_URI || "mongodb://localhost:27017/ScanDownload";
-const NODE_ENV = process.env.NODE_ENV || "development";
 const PORT = process.env.PORT || 5000;
 
-let mongoConnected = false;
+const allowedOrigins = [
+  "http://localhost:8080",
+  "https://docscanapp.vercel.app",
+];
 
-if (NODE_ENV === "production") {
-  mongoose
-    .connect(MONGODB_URI)
-    .then(() => {
-      console.log("MongoDB connected");
-      mongoConnected = true;
-    })
-    .catch((err) => {
-      console.error("MongoDB connection error:", err);
-      process.exit(1);
-    });
-} else {
-  // Development: Try to connect, but don't fail if MongoDB is not available
-  mongoose
-    .connect(MONGODB_URI)
-    .then(() => {
-      console.log("MongoDB connected");
-      mongoConnected = true;
-    })
-    .catch((err) => {
-      console.warn(
-        "MongoDB not available - using in-memory fallback for development"
-      );
-      mongoConnected = false;
-    });
-}
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
 
-export { mongoConnected };
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
+};
 
+// Multer config
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB max
-  },
+  limits: { fileSize: 50 * 1024 * 1024 },
 });
 
 export function createServer() {
@@ -78,7 +63,7 @@ export function createServer() {
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
-  // Authentication routes
+  // Auth routes
   app.post("/api/auth/send-otp", handleSendOTP);
   app.post("/api/auth/verify-otp", handleVerifyOTP);
   app.get("/api/auth/verify-token", handleVerifyToken);
@@ -92,7 +77,7 @@ export function createServer() {
   app.get("/api/documents", handleGetDocuments);
   app.get("/api/documents/:documentId/analyze", handleAnalyzeDocument);
 
-  // Chat routes (still under /api/documents)
+  // Chat routes
   app.get("/api/documents/:documentId/chat", handleGetChatMessages);
   app.post("/api/documents/:documentId/chat", handleSendChatMessage);
 
@@ -107,21 +92,14 @@ export function createServer() {
   return app;
 }
 
-const app = createServer();
+async function startApp() {
+  await connectDB();
+  const app = createServer();
+  const httpServer = createHttpServer(app);
+  initSocket(httpServer);
+  httpServer.listen(PORT, () => {
+    console.log(`🚀 Server running at http://localhost:${PORT}`);
+  });
+}
 
-
-// ⚠️ Instead of app.listen, create HTTP server and attach Socket.IO
-import { createServer as createHttpServer } from "http";
-const httpServer = createHttpServer(app);
-
-// Initialize WebSocket
-initSocket(httpServer);
-
-httpServer.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
-});
-
-
-// app.listen(PORT, () => {
-//   console.log(`Server listening on http://localhost:${PORT}`);
-// });
+startApp();
